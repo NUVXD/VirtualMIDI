@@ -1,0 +1,9 @@
+build/*
+!build/readme.md
+input/*
+!input/odileVariation.mid
+output/*
+*.pdb
+*.exe
+*.ilk
+*.obj
