@@ -35,7 +35,7 @@ struct midiTrack {
     struct event {
         uint32_t deltaTime; // VLQ
         int32_t deltaTimeMS;
-        int32_t absTime;
+        int32_t absTick;
         uint8_t type;
         uint8_t subtype;
         uint32_t length; // VLQ
@@ -55,9 +55,13 @@ struct VpRec {
     int32_t endTick;
     int32_t durationTick;
     int32_t durationMS;
-    int8_t timeSigN;
-    int8_t timeSigD;
     _Bool closed;
+};
+
+struct TsRec {
+    int32_t absTick;
+    int8_t num;
+    int8_t denum;
 };
 
 struct VLQ {
@@ -81,10 +85,13 @@ static int isOption(const char* argv) {
 
 static int wFiles(FILE*, FILE*, uint8_t*, long);
 static _Bool parseMThd(FILE*, FILE*, uint8_t*, int);
-static _Bool parseMTrk(FILE*, FILE*, uint8_t*, int, struct VpRec**, size_t*, size_t*);
+static _Bool parseMTrk(FILE*, FILE*, uint8_t*, int,
+    struct VpRec**, size_t*, size_t*,
+    struct TsRec**, size_t*, size_t*);
 static _Bool calcVLQ(uint8_t*, int);
-static _Bool apndVpRec(struct VpRec**, size_t*, size_t*, struct VpRec);
+static _Bool appendRec(void**, size_t*, size_t*, size_t, const void*);
 static int compVpRec(const void*, const void*);
+static int compTsRec(const void*, const void*);
 static void numToKey(uint8_t, uint8_t*, uint8_t*);
 
 /************************ START OF MAIN ******************************/
@@ -229,9 +236,14 @@ static int wFiles(FILE* sheetStream, FILE* logStream, uint8_t* buffer, long file
         printf("\noutputSheetFile stream not opened");
         return 1;
     }
+
     struct VpRec* allVpRecs = (void*)0;
-    size_t allVpRecCount = 0;
-    size_t allVpRecCapacity = 0;
+    size_t vpRecsCount = 0;
+    size_t vpRecsCapacity = 0;
+
+    struct TsRec* allTsRecs = (void*)0;
+    size_t tsRecsCount = 0;
+    size_t tsRecsCapacity = 0;
 
     /***********************************************************/
     /*                       PARSING                           */
@@ -253,10 +265,14 @@ static int wFiles(FILE* sheetStream, FILE* logStream, uint8_t* buffer, long file
                 }
                 else if (buffer[i + 2] == 0x72 && buffer[i + 3] == 0x6B) // "rk"
                 {
-                    if (parseMTrk(sheetStream, logStream, buffer, i + 4, &allVpRecs, &allVpRecCount, &allVpRecCapacity) != 0)
+                    if (parseMTrk(sheetStream, logStream, buffer, i + 4,
+                        &allVpRecs, &vpRecsCount, &vpRecsCapacity,
+                        &allTsRecs, &tsRecsCount, &tsRecsCapacity) != 0)
                     {
                         free(allVpRecs); // cuz it goes to next track
                         allVpRecs = (void*)0;
+                        free(allTsRecs);
+                        allTsRecs = (void*)0;
                         return 1;
                     }
                     if (logStream)
@@ -269,8 +285,10 @@ static int wFiles(FILE* sheetStream, FILE* logStream, uint8_t* buffer, long file
     /***********************************************************/
     /*                     AFTER PARSING                       */
     /***********************************************************/
-    if (allVpRecCount > 1)
-        qsort(allVpRecs, allVpRecCount, sizeof(struct VpRec), compVpRec);
+    if (vpRecsCount > 1)
+        qsort(allVpRecs, vpRecsCount, sizeof(struct VpRec), compVpRec);
+    if (tsRecsCount > 1)
+        qsort(allTsRecs, tsRecsCount, sizeof(struct TsRec), compTsRec);
 
     // Auto-transpose into C2-C7 to avoid invalid keys.
     const int32_t vpPlayableMin = 48; // C2
@@ -278,7 +296,7 @@ static int wFiles(FILE* sheetStream, FILE* logStream, uint8_t* buffer, long file
     int32_t minKeyValue = 127;
     int32_t maxKeyValue = 0;
     _Bool hasClosedNotes = 0;
-    for (size_t i = 0; i < allVpRecCount; i++)
+    for (size_t i = 0; i < vpRecsCount; i++)
     {
         if (!allVpRecs[i].closed)
             continue;
@@ -338,7 +356,8 @@ static int wFiles(FILE* sheetStream, FILE* logStream, uint8_t* buffer, long file
     /***********************************/
     /*           FORMATTING            */
     /***********************************/
-    for (size_t i = 0; i < allVpRecCount;)
+    size_t tsIndex = 0;
+    for (size_t i = 0; i < vpRecsCount;)
     {
         if (!allVpRecs[i].closed)
         {
@@ -346,16 +365,24 @@ static int wFiles(FILE* sheetStream, FILE* logStream, uint8_t* buffer, long file
             continue;
         }
         /******************* TIME SIGNATURE LOGIC ********************/
-        // turning it dynamic as opposed to last-seen
-        // [!] currently only works if the time signature change occurs inside the same track as the record [!]
-        // (tho in that regard 0 values should still be guarded by the defaulting below for now)
-        // ^ maybe to make global pointer to pointers of time signature arrays with Absolute Ticks & Time Signature Values,
-        // and advance PoP when absolute tick of record > absolute tick of NEXT time signature 
-        // (before note is to be formatted, so, here...)
-        
+        int8_t activeTimeSigN = 4;
+        int8_t activeTimeSigD = 2;
+        if (tsRecsCount > 0)
+        {
+            while (tsIndex + 1 < tsRecsCount && allTsRecs[tsIndex + 1].absTick <= allVpRecs[i].startTick)
+                tsIndex++;
+
+            if (allTsRecs[tsIndex].absTick <= allVpRecs[i].startTick)
+            {
+                activeTimeSigN = allTsRecs[tsIndex].num;
+                activeTimeSigD = allTsRecs[tsIndex].denum;
+            }
+        }
+
         // ticksPerBeat = TPQN * (4 / denum)
-        int32_t timeSigDenum;
-        timeSigDenum = 1 << allVpRecs[i].timeSigD;
+        int32_t timeSigDenum = 4;
+        if (activeTimeSigD >= 0 && activeTimeSigD <= 30)
+            timeSigDenum = 1 << activeTimeSigD;
         if (timeSigDenum <= 0)
         {
             timeSigDenum = 4;
@@ -369,7 +396,13 @@ static int wFiles(FILE* sheetStream, FILE* logStream, uint8_t* buffer, long file
             printf("\none calculated ticksPerBeat for track %zu was equal or less than 0 and was set to default header division\n", i);
         }
 
-        int32_t ticksPerBar = ticksPerBeat * allVpRecs[i].timeSigN;
+        if (activeTimeSigN <= 0)
+        {
+            activeTimeSigN = 4;
+            printf("\none timeSignature numerator for track %zu was equal or less than 0 and was set to 4\n", i);
+        }
+
+        int32_t ticksPerBar = ticksPerBeat * activeTimeSigN;
 
         int32_t chordTicks = ticksPerBeat / 8; // notes started within 1/8 beat we consider simultaneous
         if (chordTicks < 1)
@@ -387,12 +420,12 @@ static int wFiles(FILE* sheetStream, FILE* logStream, uint8_t* buffer, long file
         /******************* CLUSTERING LOGIC ************************/
         // Find one simultaneous cluster
         size_t clusterEnd = i;
-        while (clusterEnd + 1 < allVpRecCount)
+        while (clusterEnd + 1 < vpRecsCount)
         {
             size_t cand = clusterEnd + 1;
-            while (cand < allVpRecCount && !allVpRecs[cand].closed)
+            while (cand < vpRecsCount && !allVpRecs[cand].closed)
                 cand++;
-            if (cand >= allVpRecCount)
+            if (cand >= vpRecsCount)
                 break;
 
             int32_t deltaCluster = allVpRecs[cand].startTick - allVpRecs[clusterEnd].startTick;
@@ -455,11 +488,11 @@ static int wFiles(FILE* sheetStream, FILE* logStream, uint8_t* buffer, long file
         }
         // compute gap to next closed record and pause separator.
         size_t nextI = clusterEnd + 1;
-        while (nextI < allVpRecCount && !allVpRecs[nextI].closed)
+        while (nextI < vpRecsCount && !allVpRecs[nextI].closed)
             nextI++;
 
         int32_t closeDelta = INT32_MAX;
-        if (nextI < allVpRecCount)
+        if (nextI < vpRecsCount)
             closeDelta = allVpRecs[nextI].startTick - allVpRecs[clusterEnd].startTick;
 
         if (closeDelta <= noPauseMax)
@@ -498,6 +531,8 @@ static int wFiles(FILE* sheetStream, FILE* logStream, uint8_t* buffer, long file
     }
     free(allVpRecs);
     allVpRecs = (void*)0;
+    free(allTsRecs);
+    allTsRecs = (void*)0;
     if (sheetStream)
         fprintf(sheetStream, "\n");
     printf("\n");
@@ -571,10 +606,14 @@ static _Bool parseMThd(FILE* sheetStream, FILE* logStream, uint8_t* buffer, int 
     return 0;
 }
 
+// man i gotta chunk-ify this function rofl
 /*****************************************************************************/
 /*                             PARSE MIDI TRACK                              */
 /*****************************************************************************/
-static _Bool parseMTrk(FILE* sheetStream, FILE* logStream, uint8_t* buffer, int lengthStart, struct VpRec** allVpRecs, size_t* allVpRecCount, size_t* allVpRecCapacity) {
+static _Bool parseMTrk(
+    FILE* sheetStream, FILE* logStream, uint8_t* buffer, int lengthStart,
+    struct VpRec** allVpRecs, size_t* vpRecsCount, size_t* vpRecsCapacity,
+    struct TsRec** allTsRecs, size_t* tsRecsCount, size_t* tsRecsCapacity) {
     /*************************************** INITIALS ****************************************/
     // it took me 5 days and i already have no clue what the frick i wrote down here but it seems to work
     //
@@ -584,7 +623,7 @@ static _Bool parseMTrk(FILE* sheetStream, FILE* logStream, uint8_t* buffer, int 
 
     track.length = 0;
     track.event.deltaTime = 0;
-    track.event.absTime = 0;
+    track.event.absTick = 0;
     track.event.type = 0;
     track.event.subtype = 0;
     track.event.length = 0;
@@ -600,8 +639,11 @@ static _Bool parseMTrk(FILE* sheetStream, FILE* logStream, uint8_t* buffer, int 
     int i = dataStart;
     uint8_t runningStatus = 0;
     int32_t noteRecIndex[16][128];
+
     struct VpRec* VpRecs = (void*)0;
-    struct VpRec rec;
+    struct VpRec vpRec;
+    struct TsRec tsRec;
+
     size_t VpRecCount = 0;
     size_t VpRecCapacity = 0;
 
@@ -645,7 +687,7 @@ static _Bool parseMTrk(FILE* sheetStream, FILE* logStream, uint8_t* buffer, int 
         calcVLQ(buffer, i);
         track.event.deltaTime = VLQ.VLQresult;
         track.event.deltaTimeMS = (track.event.deltaTime * track.microsPT) / 1000;
-        track.event.absTime += track.event.deltaTime;
+        track.event.absTick += track.event.deltaTime;
         int afterDeltaTime = VLQ.VLQi;
         int deltaTimeBytes = afterDeltaTime - i;
 
@@ -710,7 +752,7 @@ static _Bool parseMTrk(FILE* sheetStream, FILE* logStream, uint8_t* buffer, int 
             {
                 fprintf(logStream, "\n║ META");
                 fprintf(logStream, " | deltaTime: 0x%06X(%luticks)(%lims)(@B%i-B%i)", track.event.deltaTime, track.event.deltaTime, track.event.deltaTimeMS, i, afterDeltaTime - 1);
-                fprintf(logStream, " | absTime: 0x%06X(%luticks)", track.event.absTime, track.event.absTime);
+                fprintf(logStream, " | absTick: 0x%06X(%luticks)", track.event.absTick, track.event.absTick);
                 fprintf(logStream, " | type: 0x%02X(@B%i) | subtype: 0x%02X(@B%i)", track.event.type, afterDeltaTime, track.event.subtype, cursor - 1);
             }
 
@@ -748,18 +790,24 @@ static _Bool parseMTrk(FILE* sheetStream, FILE* logStream, uint8_t* buffer, int 
                 timeSigD = buffer[dataEnd - 3];
                 timeSigC = buffer[dataEnd - 2];
                 timeSigB = buffer[dataEnd - 1];
-                int8_t timeSigDr = 1; // Denumerator result
-                timeSigDr = 1 << timeSigD;
+                int8_t timeSigDR = 1; // Denumerator result
+                timeSigDR = 1 << timeSigD;
 
-                //printf("@%i | changed time signature from %i/2^%i to %i/2^%i\n", cursor, rec.timeSigN, rec.timeSigD, timeSigN, timeSigD);
-                rec.timeSigN = timeSigN;
-                rec.timeSigD = timeSigD;
+                tsRec.absTick = track.event.absTick;
+                tsRec.num = timeSigN;
+                tsRec.denum = timeSigD;
+                if (appendRec((void**)allTsRecs, tsRecsCount, tsRecsCapacity, sizeof(**allTsRecs), &tsRec))
+                {
+                    if (logStream)
+                        fprintf(logStream, "\n | failed to allocate tsRec buffer");
+                    return 1;
+                }
 
                 if (logStream)
                 {
                     fprintf(logStream, " | TIME_SIGNATURE");
                     fprintf(logStream, " | eventLen: 0x%06X(%lu)(@B%i-B%i)", track.event.length, track.event.length, cursor, afterEventLength - 1);
-                    fprintf(logStream, " | Time: %i/%i | %i MIDI CPC | %i 32nd notes/24 MIDI clocks", timeSigN, timeSigDr, timeSigC, timeSigB);
+                    fprintf(logStream, " | Time: %i/%i | %i MIDI CPC | %i 32nd notes/24 MIDI clocks", timeSigN, timeSigDR, timeSigC, timeSigB);
                 }
                 // CPC = Clocks Per Click
             }
@@ -881,7 +929,7 @@ static _Bool parseMTrk(FILE* sheetStream, FILE* logStream, uint8_t* buffer, int 
             {
                 fprintf(logStream, "\n║ CHAN");
                 fprintf(logStream, " | deltaTime: 0x%06X(%luticks)(%lims)(@B%i-B%i)", track.event.deltaTime, track.event.deltaTime, track.event.deltaTimeMS, i, afterDeltaTime - 1);
-                fprintf(logStream, " | absTime: 0x%06X(%luticks)", track.event.absTime, track.event.absTime);
+                fprintf(logStream, " | absTick: 0x%06X(%luticks)", track.event.absTick, track.event.absTick);
                 if (hasStatusByte)
                     fprintf(logStream, " | type: 0x%02X(@B%i)", status, afterDeltaTime);
                 else
@@ -905,26 +953,26 @@ static _Bool parseMTrk(FILE* sheetStream, FILE* logStream, uint8_t* buffer, int 
 
                 numToKey(keyValue, &keyNum, &octave);
 
-                track.notes[channel][keyValue] = track.event.absTime;
-                rec.channel = channel + 1;
-                rec.keyValue = keyValue;
-                rec.keyNum = keyNum;
-                rec.octave = octave;
-                rec.startTick = track.event.absTime;
-                rec.endTick = -1;
-                rec.durationTick = -1;
-                rec.durationMS = -1;
+                track.notes[channel][keyValue] = track.event.absTick;
+                vpRec.channel = channel + 1;
+                vpRec.keyValue = keyValue;
+                vpRec.keyNum = keyNum;
+                vpRec.octave = octave;
+                vpRec.startTick = track.event.absTick;
+                vpRec.endTick = -1;
+                vpRec.durationTick = -1;
+                vpRec.durationMS = -1;
 
                 /*
                 printf("VpRec | channel: %u | keyValue: %u | keyNum: %u | octave: %u | startTick: %li | endTick: %li | durationTick: %li | durationMS: %li | timeSignature: %i/2^%i\n",
-                    rec.channel, rec.keyValue, rec.keyNum, rec.octave, rec.startTick, rec.endTick, rec.durationTick, rec.durationMS, rec.timeSigN, rec.timeSigD);
+                    vpRec.channel, vpRec.keyValue, vpRec.keyNum, vpRec.octave, vpRec.startTick, vpRec.endTick, vpRec.durationTick, vpRec.durationMS, timeSigN, timeSigD);
                 */
 
-                rec.closed = 0;
-                if (apndVpRec(&VpRecs, &VpRecCount, &VpRecCapacity, rec))
+                vpRec.closed = 0;
+                if (appendRec((void**)&VpRecs, &VpRecCount, &VpRecCapacity, sizeof(*VpRecs), &vpRec))
                 {
                     if (logStream)
-                        fprintf(logStream, "\n | failed to allocate VP rec buffer");
+                        fprintf(logStream, "\n | failed to allocate vpRec buffer");
                     break;
                 }
                 noteRecIndex[channel][keyValue] = (int32_t)(VpRecCount - 1);
@@ -960,7 +1008,7 @@ static _Bool parseMTrk(FILE* sheetStream, FILE* logStream, uint8_t* buffer, int 
                 if (track.notes[channel][keyValue] != -1)
                 {
                     startTick = track.notes[channel][keyValue];
-                    endTick = track.event.absTime;
+                    endTick = track.event.absTick;
                     noteDuration = endTick - startTick;
                     track.notes[channel][keyValue] = -1;
                     noteDurationMS = (noteDuration * track.microsPT) / 1000;
@@ -1027,7 +1075,7 @@ static _Bool parseMTrk(FILE* sheetStream, FILE* logStream, uint8_t* buffer, int 
             {
                 fprintf(logStream, "\n║ SYSEX");
                 fprintf(logStream, " | deltaTime: 0x%06X(%luticks)(%lims)(@B%i-B%i)", track.event.deltaTime, track.event.deltaTime, track.event.deltaTimeMS, i, afterDeltaTime - 1);
-                fprintf(logStream, " | absTime: 0x%06X(%luticks)", track.event.absTime, track.event.absTime);
+                fprintf(logStream, " | absTick: 0x%06X(%luticks)", track.event.absTick, track.event.absTick);
                 fprintf(logStream, " | type: 0x%02X(@B%i)", track.event.type, afterDeltaTime);
                 fprintf(logStream, " | eventLen: 0x%06X(%lu)(@B%i-B%i)", track.event.length, track.event.length, cursor, afterEventLength - 1);
             }
@@ -1043,7 +1091,7 @@ static _Bool parseMTrk(FILE* sheetStream, FILE* logStream, uint8_t* buffer, int 
     {
         if (!VpRecs[recI].closed)
             continue;
-        if (apndVpRec(allVpRecs, allVpRecCount, allVpRecCapacity, VpRecs[recI]))
+        if (appendRec((void**)allVpRecs, vpRecsCount, vpRecsCapacity, sizeof(**allVpRecs), &VpRecs[recI]))
         {
             free(VpRecs);
             VpRecs = (void*)0;
@@ -1113,18 +1161,18 @@ static _Bool calcVLQ(uint8_t* buffer, int index) {
     return 0;
 }
 
-static _Bool apndVpRec(struct VpRec** recs, size_t* count, size_t* capacity, struct VpRec value) {
+static _Bool appendRec(void** recs, size_t* count, size_t* capacity, size_t eSize, const void* value) {
     if (*count == *capacity)
     {
         size_t newCapacity = (*capacity == 0) ? 256 : (*capacity * 2);
-        struct VpRec* newRecs = (struct VpRec*)realloc(*recs, newCapacity * sizeof(struct VpRec));
+        void* newRecs = realloc(*recs, newCapacity * eSize);
         if (!newRecs)
             return 1;
         *recs = newRecs;
         *capacity = newCapacity;
     }
 
-    (*recs)[*count] = value;
+    memcpy((char*)(*recs) + (*count * eSize), value, eSize);
     (*count)++;
     return 0;
 }
@@ -1147,6 +1195,27 @@ static int compVpRec(const void* a, const void* b) {
         return -1;
     if (ra->keyValue > rb->keyValue)
         return 1;
+    return 0;
+}
+static int compTsRec(const void* a, const void* b) {
+    const struct TsRec* ra = (const struct TsRec*)a;
+    const struct TsRec* rb = (const struct TsRec*)b;
+
+    if (ra->absTick < rb->absTick)
+        return -1;
+    if (ra->absTick > rb->absTick)
+        return 1;
+
+    if (ra->num < rb->num)
+        return -1;
+    if (ra->num > rb->num)
+        return 1;
+
+    if (ra->denum < rb->denum)
+        return -1;
+    if (ra->denum > rb->denum)
+        return 1;
+
     return 0;
 }
 
@@ -1185,41 +1254,3 @@ static void numToKey(uint8_t number, uint8_t* resultName, uint8_t* resultOctave)
     *resultOctave = octave;
 }
 #pragma endregion helperFunctions
-
-/*
-10000000= 80= 128 Chan 1 | Note off | Note Number (0-127) | Note Velocity (0-127)
-10000001= 81= 129 Chan 2 | Note off | Note Number (0-127) | Note Velocity (0-127)
-10000010= 82= 130 Chan 3 | Note off | Note Number (0-127) | Note Velocity (0-127)
-10000011= 83= 131 Chan 4 | Note off | Note Number (0-127) | Note Velocity (0-127)
-10000100= 84= 132 Chan 5 | Note off | Note Number (0-127) | Note Velocity (0-127)
-10000101= 85= 133 Chan 6 | Note off | Note Number (0-127) | Note Velocity (0-127)
-10000110= 86= 134 Chan 7 | Note off | Note Number (0-127) | Note Velocity (0-127)
-10000111= 87= 135 Chan 8 | Note off | Note Number (0-127) | Note Velocity (0-127)
-10001000= 88= 136 Chan 9 | Note off | Note Number (0-127) | Note Velocity (0-127)
-10001001= 89= 137 Chan 10 | Note off | Note Number (0-127) | Note Velocity (0-127)
-10001010= 8A= 138 Chan 11 | Note off | Note Number (0-127) | Note Velocity (0-127)
-10001011= 8B= 139 Chan 12 | Note off | Note Number (0-127) | Note Velocity (0-127)
-10001100= 8C= 140 Chan 13 | Note off | Note Number (0-127) | Note Velocity (0-127)
-10001101= 8D= 141 Chan 14 | Note off | Note Number (0-127) | Note Velocity (0-127)
-10001110= 8E= 142 Chan 15 | Note off | Note Number (0-127) | Note Velocity (0-127)
-10001111= 8F= 143 Chan 16 | Note off | Note Number (0-127) | Note Velocity (0-127)
-
-10010000= 90= 144 Chan 1 | Note on | Note Number (0-127) | Note Velocity (0-127)
-10010001= 91= 145 Chan 2 | Note on | Note Number (0-127) | Note Velocity (0-127)
-10010010= 92= 146 Chan 3 | Note on | Note Number (0-127) | Note Velocity (0-127)
-10010011= 93= 147 Chan 4 | Note on | Note Number (0-127) | Note Velocity (0-127)
-10010100= 94= 148 Chan 5 | Note on | Note Number (0-127) | Note Velocity (0-127)
-10010101= 95= 149 Chan 6 | Note on | Note Number (0-127) | Note Velocity (0-127)
-10010110= 96= 150 Chan 7 | Note on | Note Number (0-127) | Note Velocity (0-127)
-10010111= 97= 151 Chan 8 | Note on | Note Number (0-127) | Note Velocity (0-127)
-10011000= 98= 152 Chan 9 | Note on | Note Number (0-127) | Note Velocity (0-127)
-10011001= 99= 153 Chan 10 | Note on | Note Number (0-127) | Note Velocity (0-127)
-10011010= 9A= 154 Chan 11 | Note on | Note Number (0-127) | Note Velocity (0-127)
-10011011= 9B= 155 Chan 12 | Note on | Note Number (0-127) | Note Velocity (0-127)
-10011100= 9C= 156 Chan 13 | Note on | Note Number (0-127) | Note Velocity (0-127)
-10011101= 9D= 157 Chan 14 | Note on | Note Number (0-127) | Note Velocity (0-127)
-10011110= 9E= 158 Chan 15 | Note on | Note Number (0-127) | Note Velocity (0-127)
-10011111= 9F= 159 Chan 16 | Note on | Note Number (0-127) | Note Velocity (0-127)
-
-[FROM THE MIDI DOCUMENTATION]
-*/
