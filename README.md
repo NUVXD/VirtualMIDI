@@ -16,7 +16,8 @@ The resulting sheet is always printed regardless.
 
 For building be sure to check out the readme inside the build subdir!  
 
-**Footnote:**  
+## Footnote
+
 Although VirtualMIDI seems to mostly work for its inteded purpose, this was mostly a learning experience for me over the course of a week; the project developed in a very erratic and "patchworky" way.
 You *will* find crude initial logic that branches into more complex paths, possibly inefficiently, with some additional features currently missing.  
 
