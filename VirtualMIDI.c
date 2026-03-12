@@ -6,13 +6,13 @@
 
 struct VpRec;
 
-int wFiles(FILE *, FILE *, uint8_t *, long);
-_Bool parseMThd(FILE *, FILE *, uint8_t *, int);
-_Bool parseMTrk(FILE *, FILE *, uint8_t *, int, struct VpRec **, size_t *, size_t *);
-_Bool calcVLQ(uint8_t *, int);
-_Bool apndVpRec(struct VpRec **, size_t *, size_t *, struct VpRec);
-int compVpRec(const void *, const void *);
-void numToKey(uint8_t, uint8_t *, uint8_t *);
+static int wFiles(FILE *, FILE *, uint8_t *, long);
+static _Bool parseMThd(FILE *, FILE *, uint8_t *, int);
+static _Bool parseMTrk(FILE *, FILE *, uint8_t *, int, struct VpRec **, size_t *, size_t *);
+static _Bool calcVLQ(uint8_t *, int);
+static _Bool apndVpRec(struct VpRec **, size_t *, size_t *, struct VpRec);
+static int compVpRec(const void *, const void *);
+static void numToKey(uint8_t, uint8_t *, uint8_t *);
 
 const char letters[14][3] = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B", "??"}; // # = 0x23
 const char keyboard[9][13][2] = {
@@ -82,27 +82,92 @@ struct VLQ
 int8_t vpTimeSigN = 4;
 int8_t vpTimeSigD = 2;
 
-/************************ START OF MAIN ******************************/
-// int main(int argc, char *argv[])
-int main()
+_Bool hasOutput;
+_Bool hasLogging;
+
+const char *options[] = {"-o", "-l"};
+static int isOption(const char *argv)
 {
-    char chosenFile[100];
-    printf("[FILES IN DIR]:\n");
-    system("dir input /b /a:-d");
-    printf("\nSelect the file name:\n");
-    scanf("%s", chosenFile);
+    for (int i = 0; i < sizeof(options) / sizeof(options[0]); i++)
+    {
+        if (strcmp(argv, options[i]) == 0)
+            return 0;
+    }
+    return 1;
+}
 
-    char inMidiFilePath[130];
-    sprintf(inMidiFilePath, "input/%s.mid", chosenFile);
+/************************ START OF MAIN ******************************/
+int main(int argc, char *argv[])
+{
+    /***********************************/
+    /*           CLI LOGIC             */
+    /***********************************/
+    // <inputPath> [-o] [-l] [<outputPath>]
+    char outputSheetPath[200];
+    char outputLogPath[200];
+    char inputFilePath[200];
 
-    const char *outVpFilePath = "output/outputVP.log";
-    const char *outLogFilePath = "output/outputLog.log";
+    if (argc >= 2 && argc <= 5)
+    {
+        snprintf(inputFilePath, sizeof(inputFilePath), "%s", argv[1]);
+        int i = 0;
+        while (*++argv)
+        // *argv is a pointer to a pointer of a string array,
+        // so it's basically the index of the current pointer to the array of the argument
+        // if i do *++argv i move the index by 1 to the next pointer
+        {
+            i++;
+            // so here *argv is the same as argv[0]
+            if (strcmp(*argv, "-o") == 0 && i < argc) // compare strings
+                hasOutput = 1;
+            if (strcmp(*argv, "-l") == 0 && i < argc)
+                hasLogging = 1;
+
+            if (*argv[0] != '-' && (hasOutput || hasLogging))
+            {
+                if (hasOutput)
+                {
+                    snprintf(outputSheetPath, sizeof(outputSheetPath), "%s\\VirtualMIDI.txt", *argv);
+                    printf("Output file at: %s\n", outputSheetPath);
+                }
+                if (hasLogging)
+                {
+                    snprintf(outputLogPath, sizeof(outputLogPath), "%s\\VirtualMIDI.log", *argv);
+                    printf("Log file at: %s\n", outputLogPath);
+                }
+            }
+            if (*argv[0] == '-' && isOption(*argv) != 0)
+            {
+                printf("unknown option: %s", *argv);
+                return 1;
+            }
+
+            if (i == argc - 1 && (hasOutput || hasLogging) && *argv[0] == '-') // at end of args
+            {
+                if (hasOutput)
+                {
+                    snprintf(outputSheetPath, sizeof(outputSheetPath), "output\\VirtualMIDI.txt");
+                    printf("Output file at: %s\n", outputSheetPath);
+                }
+                if (hasLogging)
+                {
+                    snprintf(outputLogPath, sizeof(outputLogPath), "output\\VirtualMIDI.log");
+                    printf("Log file at: %s\n", outputLogPath);
+                }
+            }
+        }
+    }
+    else
+    {
+        printf("VirtualMIDI: <inputPath> [-o] [-l] [<outputPath>]\n");
+        return 0;
+    }
 
     long fileLength;
     uint8_t *buffer;
 
-    FILE *inputMidiFile = fopen(inMidiFilePath, "rb");
-    if (inputMidiFile == (void *)0) // Check if file was opened
+    FILE *inputMidiFile = fopen(inputFilePath, "rb");
+    if (!inputMidiFile) // Check if file was opened
     {
         printf("inputMidiFile stream not opened");
         return 1;
@@ -112,7 +177,7 @@ int main()
     fileLength = ftell(inputMidiFile); // Get the current byte offset in the file
     // printf("\nFile length is %i bytes", fileLength);          // Print the byte offset as byte size
     buffer = (uint8_t *)malloc(fileLength * sizeof(uint8_t)); // Allocate enough memory in buffer for the file
-    if (buffer == (void *)0)
+    if (!buffer)
     {
         printf("\ncouldn't allocate memory to buffer");
         return 1;
@@ -128,12 +193,23 @@ int main()
     }
     inputMidiFile = (void *)0; // prevent dangling pointer
 
-    FILE *VpStream = fopen(outVpFilePath, "w");
-    FILE *logStream = fopen(outLogFilePath, "w");
-    if (wFiles(VpStream, logStream, buffer, fileLength) != 0)
+    FILE *sheetStream = (void *)0;
+    FILE *logStream = (void *)0;
+
+    if (hasOutput)
+        sheetStream = fopen(outputSheetPath, "w");
+
+    if (hasLogging)
+        logStream = fopen(outputLogPath, "w");
+
+    if (wFiles(sheetStream, logStream, buffer, fileLength) != 0)
         return 1;
-    // prevent dangling pointers
-    VpStream = (void *)0;
+
+    if (sheetStream)
+        fclose(sheetStream);
+    if (logStream)
+        fclose(logStream);
+    sheetStream = (void *)0;
     logStream = (void *)0;
 
     free(buffer);       // free buffer malloc
@@ -152,16 +228,16 @@ int main()
 #pragma region parseFunctions
 
 // conversion to VP & log
-static int wFiles(FILE *VpStream, FILE *logStream, uint8_t *buffer, long fileLength)
+static int wFiles(FILE *sheetStream, FILE *logStream, uint8_t *buffer, long fileLength)
 {
-    if (logStream == (void *)0) // Check if file was opened
+    if (logStream == (void *)0 && hasLogging) // Check if file was opened
     {
         printf("\noutputLogFile stream not opened");
         return 1;
     }
-    if (VpStream == (void *)0) // Check if file was opened
+    if (sheetStream == (void *)0 && hasOutput) // Check if file was opened
     {
-        printf("\noutputVpFile stream not opened");
+        printf("\noutputSheetFile stream not opened");
         return 1;
     }
     struct VpRec *allVpRecs = (void *)0;
@@ -169,29 +245,35 @@ static int wFiles(FILE *VpStream, FILE *logStream, uint8_t *buffer, long fileLen
     size_t allVpRecCapacity = 0;
 
     /************************************************************/
-    fprintf(logStream, "File length is %i bytes", fileLength);
-    fprintf(logStream, "\nfor parsing, bytes start from location 0");
+    if (logStream)
+    {
+        fprintf(logStream, "File length is %i bytes", fileLength);
+        fprintf(logStream, "\nfor parsing, bytes start from location 0");
+    }
     for (int i = 0; i < fileLength; i++)
     {
         // identifies chunk starters & types
-        if (buffer[i] == 0x4D && buffer[i + 1] == 0x54) // "MT"
-        {
-            if (buffer[i + 2] + buffer[i + 3] == 0x68 + 0x64) // "hd"
+        if (i + 3 < fileLength)
+            if (buffer[i] == 0x4D && buffer[i + 1] == 0x54) // "MT"
             {
-                parseMThd(VpStream, logStream, buffer, i + 4);
-                fprintf(logStream, "\n");
-            }
-            else if (buffer[i + 2] + buffer[i + 3] == 0x72 + 0x6B) // "rk"
-            {
-                if (parseMTrk(VpStream, logStream, buffer, i + 4, &allVpRecs, &allVpRecCount, &allVpRecCapacity) != 0)
+                if (buffer[i + 2] == 0x68 && buffer[i + 3] == 0x64) // "hd"
                 {
-                    free(allVpRecs);
-                    allVpRecs = (void *)0;
-                    return 1;
+                    parseMThd(sheetStream, logStream, buffer, i + 4);
+                    if (logStream)
+                        fprintf(logStream, "\n");
                 }
-                fprintf(logStream, "\n");
+                else if (buffer[i + 2] == 0x72 && buffer[i + 3] == 0x6B) // "rk"
+                {
+                    if (parseMTrk(sheetStream, logStream, buffer, i + 4, &allVpRecs, &allVpRecCount, &allVpRecCapacity) != 0)
+                    {
+                        free(allVpRecs);
+                        allVpRecs = (void *)0;
+                        return 1;
+                    }
+                    if (logStream)
+                        fprintf(logStream, "\n");
+                }
             }
-        }
         // fprintf(fileStream, " %02X ", buffer[i]);
     }
 
@@ -240,23 +322,26 @@ static int wFiles(FILE *VpStream, FILE *logStream, uint8_t *buffer, long fileLen
         }
     }
 
-    fprintf(VpStream, "# Transpose: %+d\n", autoTranspose);
     printf("\nTranspose: %+d\n", autoTranspose);
     if (hasClosedNotes)
-    {
-        fprintf(VpStream, "# MIDI range from %d-%d to %d-%d\n",
-                minKeyValue,
-                maxKeyValue,
-                minKeyValue + autoTranspose,
-                maxKeyValue + autoTranspose);
         printf("MIDI range from %d-%d to %d-%d\n",
-                minKeyValue,
-                maxKeyValue,
-                minKeyValue + autoTranspose,
-                maxKeyValue + autoTranspose);
-    }
-    fprintf(VpStream, "# Sheet:\n");
+               minKeyValue,
+               maxKeyValue,
+               minKeyValue + autoTranspose,
+               maxKeyValue + autoTranspose);
     printf("Sheet:\n");
+
+    if (sheetStream)
+    {
+        if (hasClosedNotes)
+            fprintf(sheetStream, "# MIDI range from %d-%d to %d-%d\n",
+                    minKeyValue,
+                    maxKeyValue,
+                    minKeyValue + autoTranspose,
+                    maxKeyValue + autoTranspose);
+        fprintf(sheetStream, "# Transpose: %+d\n", autoTranspose);
+        fprintf(sheetStream, "# Sheet:\n");
+    }
 
     // intervals based on last time signature
     // ticksPerBeat = TPQN * (4 / denum)
@@ -307,8 +392,9 @@ static int wFiles(FILE *VpStream, FILE *logStream, uint8_t *buffer, long fileLen
         if (isCluster)
         {
             memset(usedKeys, 0, sizeof(usedKeys));
-            fprintf(VpStream, "[");
             printf("[");
+            if (sheetStream)
+                fprintf(sheetStream, "[");
         }
 
         for (size_t k = i; k <= clusterEnd; k++)
@@ -341,13 +427,15 @@ static int wFiles(FILE *VpStream, FILE *logStream, uint8_t *buffer, long fileLen
                     continue;
                 usedKeys[keyChar] = 1;
             }
-            fprintf(VpStream, "%s", vpKey);
+            if (sheetStream)
+                fprintf(sheetStream, "%s", vpKey);
             printf("%s", vpKey);
         }
 
         if (isCluster)
         {
-            fprintf(VpStream, "]");
+            if (sheetStream)
+                fprintf(sheetStream, "]");
             printf("]");
         }
         // compute gap to next closed record and pause separator.
@@ -361,28 +449,33 @@ static int wFiles(FILE *VpStream, FILE *logStream, uint8_t *buffer, long fileLen
 
         if (closeDelta <= noPauseMax)
         {
-            fprintf(VpStream, "");
+            if (sheetStream)
+                fprintf(sheetStream, "");
             printf("");
         }
 
         else if (closeDelta <= shortPauseMax)
         {
-            fprintf(VpStream, " ");
+            if (sheetStream)
+                fprintf(sheetStream, " ");
             printf(" ");
         }
         else if (closeDelta <= mediumPauseMax)
         {
-            fprintf(VpStream, "|");
+            if (sheetStream)
+                fprintf(sheetStream, "|");
             printf("|");
         }
         else if (closeDelta <= longPauseMax)
         {
-            fprintf(VpStream, " |");
+            if (sheetStream)
+                fprintf(sheetStream, " |");
             printf(" |");
         }
         else
         {
-            fprintf(VpStream, "||");
+            if (sheetStream)
+                fprintf(sheetStream, "||");
             printf("||");
         }
 
@@ -390,24 +483,15 @@ static int wFiles(FILE *VpStream, FILE *logStream, uint8_t *buffer, long fileLen
     }
     free(allVpRecs);
     allVpRecs = (void *)0;
-    fprintf(VpStream, "\n");
+    if (sheetStream)
+        fprintf(sheetStream, "\n");
     printf("\n");
     /************************************************************/
-    if (fclose(logStream) != 0) // free the file stream pointer & check if success
-    {
-        printf("\noutputLogFile stream not closed");
-        return 1;
-    }
-    if (fclose(VpStream) != 0) // free the file stream pointer & check if success
-    {
-        printf("\noutputVpFile stream not closed");
-        return 1;
-    }
     return 0;
 }
 
 // parse header chunk
-static _Bool parseMThd(FILE *VpStream, FILE *logStream, uint8_t *buffer, int startOffset)
+static _Bool parseMThd(FILE *sheetStream, FILE *logStream, uint8_t *buffer, int startOffset)
 {
     header.length = 0;
     header.format = 0;
@@ -458,17 +542,20 @@ static _Bool parseMThd(FILE *VpStream, FILE *logStream, uint8_t *buffer, int sta
         header.FPS = (int8_t)header.division >> 8;
         header.TPF = header.division & 0xFF;
     }
-    fprintf(logStream, "\n\n║ MThd start(@B%i)", startOffset - 4);
-    fprintf(logStream, " | MThd data length (from B%i): %iB", (startOffset + 3), header.length);
-    fprintf(logStream, " | Format: %hi", header.format);
-    fprintf(logStream, " | nTrks: %hi", header.nTrks);
-    fprintf(logStream, " | Division: 0x%04X(%hi) - bit15: %i", header.division, header.division, header.divFormat);
-    fprintf(logStream, " | MThd end(@B%i)\n", dataEndOffset);
+    if (logStream)
+    {
+        fprintf(logStream, "\n\n║ MThd start(@B%i)", startOffset - 4);
+        fprintf(logStream, " | MThd data length (from B%i): %iB", (startOffset + 3), header.length);
+        fprintf(logStream, " | Format: %hi", header.format);
+        fprintf(logStream, " | nTrks: %hi", header.nTrks);
+        fprintf(logStream, " | Division: 0x%04X(%hi) - bit15: %i", header.division, header.division, header.divFormat);
+        fprintf(logStream, " | MThd end(@B%i)\n", dataEndOffset);
+    }
     return 0;
 }
 
 // parse track chunk
-static _Bool parseMTrk(FILE *VpStream, FILE *logStream, uint8_t *buffer, int lengthStart, struct VpRec **allVpRecs, size_t *allVpRecCount, size_t *allVpRecCapacity)
+static _Bool parseMTrk(FILE *sheetStream, FILE *logStream, uint8_t *buffer, int lengthStart, struct VpRec **allVpRecs, size_t *allVpRecCount, size_t *allVpRecCapacity)
 {
     /*************************************** INITIALS ****************************************/
     // it took me 5 days and i already have no clue what the frick i wrote down here but it seems to work
@@ -529,7 +616,8 @@ static _Bool parseMTrk(FILE *VpStream, FILE *logStream, uint8_t *buffer, int len
     }
     */
 
-    fprintf(logStream, "║ MTrk start(@B%i) | MTrk data length(from B%i): %iB\n", lengthStart - 4, dataStart, track.length);
+    if (logStream)
+        fprintf(logStream, "║ MTrk start(@B%i) | MTrk data length(from B%i): %iB\n", lengthStart - 4, dataStart, track.length);
     /************************************ HANDLE EVENTS **************************************/
     while (i < trackEnd)
     {
@@ -542,7 +630,8 @@ static _Bool parseMTrk(FILE *VpStream, FILE *logStream, uint8_t *buffer, int len
 
         if (afterDeltaTime >= trackEnd)
         {
-            fprintf(logStream, "\n | event starts outside track(@B%i)", afterDeltaTime);
+            if (logStream)
+                fprintf(logStream, "\n | event starts outside track(@B%i)", afterDeltaTime);
             break;
         }
 
@@ -562,7 +651,8 @@ static _Bool parseMTrk(FILE *VpStream, FILE *logStream, uint8_t *buffer, int len
         {
             if (runningStatus == 0)
             {
-                fprintf(logStream, "\n | running status missing(@B%i)", afterDeltaTime);
+                if (logStream)
+                    fprintf(logStream, "\n | running status missing(@B%i)", afterDeltaTime);
                 break;
             }
             status = runningStatus;
@@ -578,7 +668,8 @@ static _Bool parseMTrk(FILE *VpStream, FILE *logStream, uint8_t *buffer, int len
         {
             if (cursor >= trackEnd)
             {
-                fprintf(logStream, "\n | meta subtype outside track(@B%i)", cursor);
+                if (logStream)
+                    fprintf(logStream, "\n | meta subtype outside track(@B%i)", cursor);
                 break;
             }
             track.event.subtype = buffer[cursor++];
@@ -589,22 +680,29 @@ static _Bool parseMTrk(FILE *VpStream, FILE *logStream, uint8_t *buffer, int len
             int dataEnd = afterEventLength + (int)track.event.length;
             if (dataEnd > trackEnd)
             {
-                fprintf(logStream, "\n | meta data outside track(@B%i)", dataEnd);
+                if (logStream)
+                    fprintf(logStream, "\n | meta data outside track(@B%i)", dataEnd);
                 break;
             }
 
-            fprintf(logStream, "\n║ META");
-            fprintf(logStream, " | deltaTime: 0x%06X(%luticks)(%lims)(@B%i-B%i)", track.event.deltaTime, track.event.deltaTime, track.event.deltaTimeMS, i, afterDeltaTime - 1);
-            fprintf(logStream, " | absTime: 0x%06X(%luticks)", track.event.absTime, track.event.absTime);
-            fprintf(logStream, " | type: 0x%02X(@B%i) | subtype: 0x%02X(@B%i)", track.event.type, afterDeltaTime, track.event.subtype, cursor - 1);
+            if (logStream)
+            {
+                fprintf(logStream, "\n║ META");
+                fprintf(logStream, " | deltaTime: 0x%06X(%luticks)(%lims)(@B%i-B%i)", track.event.deltaTime, track.event.deltaTime, track.event.deltaTimeMS, i, afterDeltaTime - 1);
+                fprintf(logStream, " | absTime: 0x%06X(%luticks)", track.event.absTime, track.event.absTime);
+                fprintf(logStream, " | type: 0x%02X(@B%i) | subtype: 0x%02X(@B%i)", track.event.type, afterDeltaTime, track.event.subtype, cursor - 1);
+            }
 
             /***********************************/
             /*           SET TEMPO             */
             /***********************************/
             if (track.event.subtype == 0x51) // "Set Tempo" Meta Event
             {
-                fprintf(logStream, " | SET_TEMPO");
-                fprintf(logStream, " | eventLen: 0x%06X(%lu)(@B%i-B%i)", track.event.length, track.event.length, cursor, afterEventLength - 1);
+                if (logStream)
+                {
+                    fprintf(logStream, " | SET_TEMPO");
+                    fprintf(logStream, " | eventLen: 0x%06X(%lu)(@B%i-B%i)", track.event.length, track.event.length, cursor, afterEventLength - 1);
+                }
                 track.microsPQN = 0;
                 track.microsPT = 0;
                 if (header.divFormat == 0)
@@ -635,9 +733,12 @@ static _Bool parseMTrk(FILE *VpStream, FILE *logStream, uint8_t *buffer, int len
                 for (int i = 0; i < timeSigD; i++)
                     timeSigDr *= 2;
 
-                fprintf(logStream, " | TIME_SIGNATURE");
-                fprintf(logStream, " | eventLen: 0x%06X(%lu)(@B%i-B%i)", track.event.length, track.event.length, cursor, afterEventLength - 1);
-                fprintf(logStream, " | Time: %i/%i | %i MIDI CPC | %i 32nd notes/24 MIDI clocks", timeSigN, timeSigDr, timeSigC, timeSigB);
+                if (logStream)
+                {
+                    fprintf(logStream, " | TIME_SIGNATURE");
+                    fprintf(logStream, " | eventLen: 0x%06X(%lu)(@B%i-B%i)", track.event.length, track.event.length, cursor, afterEventLength - 1);
+                    fprintf(logStream, " | Time: %i/%i | %i MIDI CPC | %i 32nd notes/24 MIDI clocks", timeSigN, timeSigDr, timeSigC, timeSigB);
+                }
                 // CPC = Clocks Per Click
             }
             /***********************************/
@@ -648,20 +749,23 @@ static _Bool parseMTrk(FILE *VpStream, FILE *logStream, uint8_t *buffer, int len
                 keySigSF = buffer[dataEnd - 2];
                 keySignMI = buffer[dataEnd - 1];
 
-                fprintf(logStream, " | KEY_SIGNATURE");
-                fprintf(logStream, " | eventLen: 0x%06X(%lu)(@B%i-B%i)", track.event.length, track.event.length, cursor, afterEventLength - 1);
+                if (logStream)
+                {
+                    fprintf(logStream, " | KEY_SIGNATURE");
+                    fprintf(logStream, " | eventLen: 0x%06X(%lu)(@B%i-B%i)", track.event.length, track.event.length, cursor, afterEventLength - 1);
 
-                if (keySigSF < 0)
-                    fprintf(logStream, " | Flats: %i", -1 * keySigSF);
-                else if (keySigSF == 0)
-                    fprintf(logStream, " | Key of C");
-                else
-                    fprintf(logStream, " | Sharps: %i", keySigSF);
+                    if (keySigSF < 0)
+                        fprintf(logStream, " | Flats: %i", -1 * keySigSF);
+                    else if (keySigSF == 0)
+                        fprintf(logStream, " | Key of C");
+                    else
+                        fprintf(logStream, " | Sharps: %i", keySigSF);
 
-                if (keySignMI)
-                    fprintf(logStream, " | Minor");
-                else
-                    fprintf(logStream, " | Major");
+                    if (keySignMI)
+                        fprintf(logStream, " | Minor");
+                    else
+                        fprintf(logStream, " | Major");
+                }
             }
             /***********************************/
             /*          TEXT  EVENT            */
@@ -672,9 +776,12 @@ static _Bool parseMTrk(FILE *VpStream, FILE *logStream, uint8_t *buffer, int len
                 for (int j = 0; j <= track.event.length; j++)
                     text[j] = buffer[afterEventLength + j];
 
-                fprintf(logStream, " | TEXT_EVENT");
-                fprintf(logStream, " | eventLen: 0x%06X(%lu)(@B%i-B%i)", track.event.length, track.event.length, cursor, afterEventLength - 1);
-                fprintf(logStream, " | Text %s", text);
+                if (logStream)
+                {
+                    fprintf(logStream, " | TEXT_EVENT");
+                    fprintf(logStream, " | eventLen: 0x%06X(%lu)(@B%i-B%i)", track.event.length, track.event.length, cursor, afterEventLength - 1);
+                    fprintf(logStream, " | Text %s", text);
+                }
             }
             /***********************************/
             /*        COPYRIGHT NOTICE         */
@@ -685,9 +792,12 @@ static _Bool parseMTrk(FILE *VpStream, FILE *logStream, uint8_t *buffer, int len
                 for (int j = 0; j <= track.event.length; j++)
                     text[j] = buffer[afterEventLength + j];
 
-                fprintf(logStream, " | COPYRIGHT_NOTICE");
-                fprintf(logStream, " | eventLen: 0x%06X(%lu)(@B%i-B%i)", track.event.length, track.event.length, cursor, afterEventLength - 1);
-                fprintf(logStream, " | Text %s", text);
+                if (logStream)
+                {
+                    fprintf(logStream, " | COPYRIGHT_NOTICE");
+                    fprintf(logStream, " | eventLen: 0x%06X(%lu)(@B%i-B%i)", track.event.length, track.event.length, cursor, afterEventLength - 1);
+                    fprintf(logStream, " | Text %s", text);
+                }
             }
             /***********************************/
             /*          SEQUENCE NAME          */
@@ -698,24 +808,31 @@ static _Bool parseMTrk(FILE *VpStream, FILE *logStream, uint8_t *buffer, int len
                 for (int j = 0; j <= track.event.length; j++)
                     text[j] = buffer[afterEventLength + j];
 
-                fprintf(logStream, " | SEQUENCE_NAME");
-                fprintf(logStream, " | eventLen: 0x%06X(%lu)(@B%i-B%i)", track.event.length, track.event.length, cursor, afterEventLength - 1);
-                fprintf(logStream, " | Text %s", text);
+                if (logStream)
+                {
+                    fprintf(logStream, " | SEQUENCE_NAME");
+                    fprintf(logStream, " | eventLen: 0x%06X(%lu)(@B%i-B%i)", track.event.length, track.event.length, cursor, afterEventLength - 1);
+                    fprintf(logStream, " | Text %s", text);
+                }
             }
             /***********************************/
             /*         END OF TRACK            */
             /***********************************/
             else if (track.event.subtype == 0x2F) // "End Of Track" Meta Event
             {
-                fprintf(logStream, " | END_OF_TRACK");
+                if (logStream)
+                    fprintf(logStream, " | END_OF_TRACK");
             }
             /***********************************/
             /*      UNKNOWN META EVENTS        */
             /***********************************/
             else
             {
-                fprintf(logStream, " | UNKNOWN_EVENT");
-                fprintf(logStream, " | eventLen: 0x%06X(%lu)(@B%i-B%i)", track.event.length, track.event.length, cursor, afterEventLength - 1);
+                if (logStream)
+                {
+                    fprintf(logStream, " | UNKNOWN_EVENT");
+                    fprintf(logStream, " | eventLen: 0x%06X(%lu)(@B%i-B%i)", track.event.length, track.event.length, cursor, afterEventLength - 1);
+                }
             }
 
             i = dataEnd;
@@ -729,21 +846,25 @@ static _Bool parseMTrk(FILE *VpStream, FILE *logStream, uint8_t *buffer, int len
             int channelDataBytes = ((status & 0xF0) == 0xC0 || (status & 0xF0) == 0xD0) ? 1 : 2;
             int dataStartByte = cursor;
             int dataEnd = dataStartByte + channelDataBytes;
-            if (dataEnd > trackEnd)
-            {
-                fprintf(logStream, "\n | channel data outside track(@B%i)", dataEnd);
-                break;
-            }
+            if (logStream)
+                if (dataEnd > trackEnd)
+                {
+                    fprintf(logStream, "\n | channel data outside track(@B%i)", dataEnd);
+                    break;
+                }
             track.event.length = (uint32_t)channelDataBytes;
             track.event.subtype = buffer[dataStartByte];
 
-            fprintf(logStream, "\n║ CHAN");
-            fprintf(logStream, " | deltaTime: 0x%06X(%luticks)(%lims)(@B%i-B%i)", track.event.deltaTime, track.event.deltaTime, track.event.deltaTimeMS, i, afterDeltaTime - 1);
-            fprintf(logStream, " | absTime: 0x%06X(%luticks)", track.event.absTime, track.event.absTime);
-            if (hasStatusByte)
-                fprintf(logStream, " | type: 0x%02X(@B%i)", status, afterDeltaTime);
-            else
-                fprintf(logStream, " | type: 0x%02X(running)", status);
+            if (logStream)
+            {
+                fprintf(logStream, "\n║ CHAN");
+                fprintf(logStream, " | deltaTime: 0x%06X(%luticks)(%lims)(@B%i-B%i)", track.event.deltaTime, track.event.deltaTime, track.event.deltaTimeMS, i, afterDeltaTime - 1);
+                fprintf(logStream, " | absTime: 0x%06X(%luticks)", track.event.absTime, track.event.absTime);
+                if (hasStatusByte)
+                    fprintf(logStream, " | type: 0x%02X(@B%i)", status, afterDeltaTime);
+                else
+                    fprintf(logStream, " | type: 0x%02X(running)", status);
+            }
 
 #define isNoteOn (status >= 0x90 && status <= 0x9F)  // 0x9# Note ON
 #define isNoteOff (status >= 0x80 && status <= 0x8F) // 0x8# Note OFF
@@ -776,17 +897,21 @@ static _Bool parseMTrk(FILE *VpStream, FILE *logStream, uint8_t *buffer, int len
                 rec.closed = 0;
                 if (apndVpRec(&VpRecs, &VpRecCount, &VpRecCapacity, rec))
                 {
-                    fprintf(logStream, "\n | failed to allocate VP rec buffer");
+                    if (logStream)
+                        fprintf(logStream, "\n | failed to allocate VP rec buffer");
                     break;
                 }
                 noteRecIndex[channel][keyValue] = (int32_t)(VpRecCount - 1);
                 // printf("Ch%iKey%i Set to %i\n", channel, keyValue, track.notes[channel][keyValue]);
 
-                fprintf(logStream, " | NOTE_ON");
-                fprintf(logStream, " | Ch%u", channel + 1);
-                fprintf(logStream, " | eventLen: %lu(@B%i-B%i)", track.event.length, dataStartByte, dataEnd - 1);
-                fprintf(logStream, " | noteNum %s%u(%i)", letters[keyNum], octave, buffer[dataStartByte]);
-                fprintf(logStream, " | noteVel %i(0-127)", buffer[dataStartByte + 1]);
+                if (logStream)
+                {
+                    fprintf(logStream, " | NOTE_ON");
+                    fprintf(logStream, " | Ch%u", channel + 1);
+                    fprintf(logStream, " | eventLen: %lu(@B%i-B%i)", track.event.length, dataStartByte, dataEnd - 1);
+                    fprintf(logStream, " | noteNum %s%u(%i)", letters[keyNum], octave, buffer[dataStartByte]);
+                    fprintf(logStream, " | noteVel %i(0-127)", buffer[dataStartByte + 1]);
+                }
             }
             /***********************************/
             /*            NOTE_OFF             */
@@ -823,26 +948,33 @@ static _Bool parseMTrk(FILE *VpStream, FILE *logStream, uint8_t *buffer, int len
                         VpRecs[recIndex].closed = 1;
                     }
 
-                    // fprintf(VpStream, "%s ",  keyboard[octave][keyNum]);
+                    // fprintf(sheetStream, "%s ",  keyboard[octave][keyNum]);
                 }
                 else
                 {
-                    fprintf(logStream, " | (!) DUPLICATE NOTE_OFF (!)");
+                    if (logStream)
+                        fprintf(logStream, " | (!) DUPLICATE NOTE_OFF (!)");
                 }
 
-                fprintf(logStream, " | NOTE_OFF");
-                fprintf(logStream, " | Ch%u", (status & 0x0F) + 1);
-                fprintf(logStream, " | eventLen: %lu(@B%i-B%i)", track.event.length, dataStartByte, dataEnd - 1);
-                fprintf(logStream, " | noteNum %s%u(%i)", letters[keyNum], octave, buffer[dataStartByte]);
-                fprintf(logStream, " | noteVel %i(0-127)", buffer[dataStartByte + 1]);
+                if (logStream)
+                {
+                    fprintf(logStream, " | NOTE_OFF");
+                    fprintf(logStream, " | Ch%u", (status & 0x0F) + 1);
+                    fprintf(logStream, " | eventLen: %lu(@B%i-B%i)", track.event.length, dataStartByte, dataEnd - 1);
+                    fprintf(logStream, " | noteNum %s%u(%i)", letters[keyNum], octave, buffer[dataStartByte]);
+                    fprintf(logStream, " | noteVel %i(0-127)", buffer[dataStartByte + 1]);
+                }
             }
             /***********************************/
             /*      UNKNOWN CHAN EVENTS        */
             /***********************************/
             else
             {
-                fprintf(logStream, " | (unknown event)");
-                fprintf(logStream, " | eventLen: %lu(@B%i-B%i)", track.event.length, dataStartByte, dataEnd - 1);
+                if (logStream)
+                {
+                    fprintf(logStream, " | (unknown event)");
+                    fprintf(logStream, " | eventLen: %lu(@B%i-B%i)", track.event.length, dataStartByte, dataEnd - 1);
+                }
             }
 
             i = dataEnd;
@@ -860,20 +992,24 @@ static _Bool parseMTrk(FILE *VpStream, FILE *logStream, uint8_t *buffer, int len
             int dataEnd = afterEventLength + (int)track.event.length;
             if (dataEnd > trackEnd)
             {
-                fprintf(logStream, "\n | sysex data outside track(@B%i)", dataEnd);
+                if (logStream)
+                    fprintf(logStream, "\n | sysex data outside track(@B%i)", dataEnd);
                 break;
             }
 
-            fprintf(logStream, "\n║ SYSEX");
-            fprintf(logStream, " | deltaTime: 0x%06X(%luticks)(%lims)(@B%i-B%i)", track.event.deltaTime, track.event.deltaTime, track.event.deltaTimeMS, i, afterDeltaTime - 1);
-            fprintf(logStream, " | absTime: 0x%06X(%luticks)", track.event.absTime, track.event.absTime);
-            fprintf(logStream, " | type: 0x%02X(@B%i)", track.event.type, afterDeltaTime);
-            fprintf(logStream, " | eventLen: 0x%06X(%lu)(@B%i-B%i)", track.event.length, track.event.length, cursor, afterEventLength - 1);
-
+            if (logStream)
+            {
+                fprintf(logStream, "\n║ SYSEX");
+                fprintf(logStream, " | deltaTime: 0x%06X(%luticks)(%lims)(@B%i-B%i)", track.event.deltaTime, track.event.deltaTime, track.event.deltaTimeMS, i, afterDeltaTime - 1);
+                fprintf(logStream, " | absTime: 0x%06X(%luticks)", track.event.absTime, track.event.absTime);
+                fprintf(logStream, " | type: 0x%02X(@B%i)", track.event.type, afterDeltaTime);
+                fprintf(logStream, " | eventLen: 0x%06X(%lu)(@B%i-B%i)", track.event.length, track.event.length, cursor, afterEventLength - 1);
+            }
             i = dataEnd;
             continue;
         }
-        fprintf(logStream, "\n | unsupported status 0x%02X(@B%i)", status, afterDeltaTime);
+        if (logStream)
+            fprintf(logStream, "\n | unsupported status 0x%02X(@B%i)", status, afterDeltaTime);
         break;
     }
     /**************************** MERGE THIS TRACK INTO GLOBAL VP BUFFER ****************************/
@@ -885,14 +1021,16 @@ static _Bool parseMTrk(FILE *VpStream, FILE *logStream, uint8_t *buffer, int len
         {
             free(VpRecs);
             VpRecs = (void *)0;
-            fprintf(logStream, "\n | failed to allocate merged VP buffer");
+            if (logStream)
+                fprintf(logStream, "\n | failed to allocate merged VP buffer");
             return 1;
         }
     }
     free(VpRecs);
     VpRecs = (void *)0;
 
-    fprintf(logStream, "\n");
+    if (logStream)
+        fprintf(logStream, "\n");
     return 0;
 }
 /*
@@ -956,7 +1094,7 @@ static _Bool apndVpRec(struct VpRec **recs, size_t *count, size_t *capacity, str
     {
         size_t newCapacity = (*capacity == 0) ? 256 : (*capacity * 2);
         struct VpRec *newRecs = (struct VpRec *)realloc(*recs, newCapacity * sizeof(struct VpRec));
-        if (newRecs == (void *)0)
+        if (!newRecs)
             return 1;
         *recs = newRecs;
         *capacity = newCapacity;

@@ -1,7 +1,5 @@
 # Operating System
-The System() function is used at the start of main(), 
-be sure to correct it of you're using anything other than Windows.
-Other than that, should work on most operating systems due to the current lack of non-standard libraries,
+Should work on most operating systems due to the current lack of non-standard libraries,
 but read below.
 
 # Compiler
