@@ -4,17 +4,7 @@
 #include <stdint.h>
 #include <math.h>
 
-struct VpRec;
-
-static int wFiles(FILE *, FILE *, uint8_t *, long);
-static _Bool parseMThd(FILE *, FILE *, uint8_t *, int);
-static _Bool parseMTrk(FILE *, FILE *, uint8_t *, int, struct VpRec **, size_t *, size_t *);
-static _Bool calcVLQ(uint8_t *, int);
-static _Bool apndVpRec(struct VpRec **, size_t *, size_t *, struct VpRec);
-static int compVpRec(const void *, const void *);
-static void numToKey(uint8_t, uint8_t *, uint8_t *);
-
-const char letters[14][3] = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B", "??"}; // # = 0x23
+const char letters[14][3] = { "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B", "??" }; // # = 0x23
 const char keyboard[9][13][2] = {
     {""},
     {""},
@@ -28,8 +18,7 @@ const char keyboard[9][13][2] = {
 
 // need to initialize the vars to 0 because the "OR assignment" or "Accumulator" (|=) turns bits on without clearing
 // definitely not how structs are meant to be used generally but YOLO XD
-struct midiHeader
-{
+struct midiHeader {
     uint32_t length;
     uint16_t format;
     uint16_t nTrks;
@@ -39,13 +28,11 @@ struct midiHeader
     uint8_t TPF; // for divFormat = 1
 } header;
 
-struct midiTrack
-{
+struct midiTrack {
     uint32_t length;    // fixed at 4 bytes
     uint32_t microsPQN; // microseconds per quarter note
     int32_t microsPT;   // microseconds per tick
-    struct event
-    {
+    struct event {
         uint32_t deltaTime; // VLQ
         int32_t deltaTimeMS;
         int32_t absTime;
@@ -59,8 +46,7 @@ struct midiTrack
     int32_t notes[16][128];
 } track;
 
-struct VpRec
-{
+struct VpRec {
     uint8_t channel;  // 1-16
     uint8_t keyValue; // 0-127 MIDI key number
     uint8_t keyNum;   // 0-11 key index in octave
@@ -69,25 +55,22 @@ struct VpRec
     int32_t endTick;
     int32_t durationTick;
     int32_t durationMS;
+    int8_t timeSigN;
+    int8_t timeSigD;
     _Bool closed;
 };
 
-struct VLQ
-{
+struct VLQ {
     int VLQi;
     uint8_t cByte;
     uint32_t VLQresult;
 } VLQ;
 
-int8_t vpTimeSigN = 4;
-int8_t vpTimeSigD = 2;
-
 _Bool hasOutput;
 _Bool hasLogging;
 
-const char *options[] = {"-o", "-l"};
-static int isOption(const char *argv)
-{
+const char* options[] = { "-o", "-l" };
+static int isOption(const char* argv) {
     for (int i = 0; i < sizeof(options) / sizeof(options[0]); i++)
     {
         if (strcmp(argv, options[i]) == 0)
@@ -96,9 +79,16 @@ static int isOption(const char *argv)
     return 1;
 }
 
+static int wFiles(FILE*, FILE*, uint8_t*, long);
+static _Bool parseMThd(FILE*, FILE*, uint8_t*, int);
+static _Bool parseMTrk(FILE*, FILE*, uint8_t*, int, struct VpRec**, size_t*, size_t*);
+static _Bool calcVLQ(uint8_t*, int);
+static _Bool apndVpRec(struct VpRec**, size_t*, size_t*, struct VpRec);
+static int compVpRec(const void*, const void*);
+static void numToKey(uint8_t, uint8_t*, uint8_t*);
+
 /************************ START OF MAIN ******************************/
-int main(int argc, char *argv[])
-{
+int main(int argc, char* argv[]) {
     /***********************************/
     /*           CLI LOGIC             */
     /***********************************/
@@ -112,9 +102,9 @@ int main(int argc, char *argv[])
         snprintf(inputFilePath, sizeof(inputFilePath), "%s", argv[1]);
         int i = 0;
         while (*++argv)
-        // *argv is a pointer to a pointer of a string array,
-        // so it's basically the index of the current pointer to the array of the argument
-        // if i do *++argv i move the index by 1 to the next pointer
+            // *argv is a pointer to a pointer of a string array,
+            // so it's basically the index of the current pointer to the array of the argument
+            // if i do *++argv i move the index by 1 to the next pointer
         {
             i++;
             // so here *argv is the same as argv[0]
@@ -164,9 +154,9 @@ int main(int argc, char *argv[])
     }
 
     long fileLength;
-    uint8_t *buffer;
+    uint8_t* buffer;
 
-    FILE *inputMidiFile = fopen(inputFilePath, "rb");
+    FILE* inputMidiFile = fopen(inputFilePath, "rb");
     if (!inputMidiFile) // Check if file was opened
     {
         printf("inputMidiFile stream not opened");
@@ -176,14 +166,13 @@ int main(int argc, char *argv[])
     fseek(inputMidiFile, 0, SEEK_END); // Jump to the end of the file
     fileLength = ftell(inputMidiFile); // Get the current byte offset in the file
     // printf("\nFile length is %i bytes", fileLength);          // Print the byte offset as byte size
-    buffer = (uint8_t *)malloc(fileLength * sizeof(uint8_t)); // Allocate enough memory in buffer for the file
+    buffer = (uint8_t*)malloc(fileLength * sizeof(uint8_t)); // Allocate enough memory in buffer for the file
     if (!buffer)
     {
         printf("\ncouldn't allocate memory to buffer");
         return 1;
     }
-    rewind(inputMidiFile); // Jump back to the start of the file
-
+    rewind(inputMidiFile);                       // Jump back to the start of the file
     fread(buffer, 1, fileLength, inputMidiFile); // Read into buffer the entire file
 
     if (fclose(inputMidiFile) != 0) // free the file stream pointer & check if success
@@ -191,14 +180,13 @@ int main(int argc, char *argv[])
         printf("\ninputMidiFile stream not closed");
         return 1;
     }
-    inputMidiFile = (void *)0; // prevent dangling pointer
+    inputMidiFile = (void*)0; // prevent dangling pointer
 
-    FILE *sheetStream = (void *)0;
-    FILE *logStream = (void *)0;
+    FILE* sheetStream = (void*)0;
+    FILE* logStream = (void*)0;
 
     if (hasOutput)
         sheetStream = fopen(outputSheetPath, "w");
-
     if (hasLogging)
         logStream = fopen(outputLogPath, "w");
 
@@ -209,11 +197,11 @@ int main(int argc, char *argv[])
         fclose(sheetStream);
     if (logStream)
         fclose(logStream);
-    sheetStream = (void *)0;
-    logStream = (void *)0;
+    sheetStream = (void*)0;
+    logStream = (void*)0;
 
     free(buffer);       // free buffer malloc
-    buffer = (void *)0; // free pointer
+    buffer = (void*)0; // free pointer
     if (buffer)
     {
         printf("\ncouldn't free memory from buffer");
@@ -227,29 +215,30 @@ int main(int argc, char *argv[])
 
 #pragma region parseFunctions
 
-// conversion to VP & log
-static int wFiles(FILE *sheetStream, FILE *logStream, uint8_t *buffer, long fileLength)
-{
-    if (logStream == (void *)0 && hasLogging) // Check if file was opened
+/*****************************************************************************/
+/*                            WRITE OUTPUT SHEET                             */
+/*****************************************************************************/
+static int wFiles(FILE* sheetStream, FILE* logStream, uint8_t* buffer, long fileLength) {
+    if (logStream == (void*)0 && hasLogging) // Check if file was opened
     {
         printf("\noutputLogFile stream not opened");
         return 1;
     }
-    if (sheetStream == (void *)0 && hasOutput) // Check if file was opened
+    if (sheetStream == (void*)0 && hasOutput) // Check if file was opened
     {
         printf("\noutputSheetFile stream not opened");
         return 1;
     }
-    struct VpRec *allVpRecs = (void *)0;
+    struct VpRec* allVpRecs = (void*)0;
     size_t allVpRecCount = 0;
     size_t allVpRecCapacity = 0;
 
-    /************************************************************/
+    /***********************************************************/
+    /*                       PARSING                           */
+    /***********************************************************/
     if (logStream)
-    {
         fprintf(logStream, "File length is %i bytes", fileLength);
-        fprintf(logStream, "\nfor parsing, bytes start from location 0");
-    }
+
     for (int i = 0; i < fileLength; i++)
     {
         // identifies chunk starters & types
@@ -266,8 +255,8 @@ static int wFiles(FILE *sheetStream, FILE *logStream, uint8_t *buffer, long file
                 {
                     if (parseMTrk(sheetStream, logStream, buffer, i + 4, &allVpRecs, &allVpRecCount, &allVpRecCapacity) != 0)
                     {
-                        free(allVpRecs);
-                        allVpRecs = (void *)0;
+                        free(allVpRecs); // cuz it goes to next track
+                        allVpRecs = (void*)0;
                         return 1;
                     }
                     if (logStream)
@@ -277,6 +266,9 @@ static int wFiles(FILE *sheetStream, FILE *logStream, uint8_t *buffer, long file
         // fprintf(fileStream, " %02X ", buffer[i]);
     }
 
+    /***********************************************************/
+    /*                     AFTER PARSING                       */
+    /***********************************************************/
     if (allVpRecCount > 1)
         qsort(allVpRecs, allVpRecCount, sizeof(struct VpRec), compVpRec);
 
@@ -297,12 +289,14 @@ static int wFiles(FILE *sheetStream, FILE *logStream, uint8_t *buffer, long file
             maxKeyValue = allVpRecs[i].keyValue;
     }
 
+    /***********************************/
+    /*         TRANSPOSITION           */
+    /***********************************/
     int32_t autoTranspose = 0;
     if (hasClosedNotes)
     {
         int32_t minShift = vpPlayableMin - minKeyValue;
         int32_t maxShift = vpPlayableMax - maxKeyValue;
-
         if (minShift <= maxShift)
         {
             // pick the shift closest to zero inside the valid interval
@@ -321,47 +315,29 @@ static int wFiles(FILE *sheetStream, FILE *logStream, uint8_t *buffer, long file
             autoTranspose = targetMid - sourceMid;
         }
     }
-
     printf("\nTranspose: %+d\n", autoTranspose);
     if (hasClosedNotes)
         printf("MIDI range from %d-%d to %d-%d\n",
-               minKeyValue,
-               maxKeyValue,
-               minKeyValue + autoTranspose,
-               maxKeyValue + autoTranspose);
+            minKeyValue,
+            maxKeyValue,
+            minKeyValue + autoTranspose,
+            maxKeyValue + autoTranspose);
     printf("Sheet:\n");
-
     if (sheetStream)
     {
         if (hasClosedNotes)
             fprintf(sheetStream, "# MIDI range from %d-%d to %d-%d\n",
-                    minKeyValue,
-                    maxKeyValue,
-                    minKeyValue + autoTranspose,
-                    maxKeyValue + autoTranspose);
+                minKeyValue,
+                maxKeyValue,
+                minKeyValue + autoTranspose,
+                maxKeyValue + autoTranspose);
         fprintf(sheetStream, "# Transpose: %+d\n", autoTranspose);
         fprintf(sheetStream, "# Sheet:\n");
     }
 
-    // intervals based on last time signature
-    // ticksPerBeat = TPQN * (4 / denum)
-    int32_t tsDenominator = 1 << vpTimeSigD;
-    if (tsDenominator <= 0)
-        tsDenominator = 4;
-    int32_t ticksPerBeat = (int32_t)((header.division * 4) / tsDenominator);
-    if (ticksPerBeat <= 0)
-        ticksPerBeat = header.division;
-    int32_t ticksPerBar = ticksPerBeat * vpTimeSigN;
-
-    int32_t chordTicks = ticksPerBeat / 8; // notes started within 1/8 beat we consider simultaneous
-    if (chordTicks < 1)
-        chordTicks = 1;
-    int32_t noPauseMax = ticksPerBeat / 4;    // up to 1/16 note
-    int32_t shortPauseMax = ticksPerBeat / 2; // up to 1/8 note
-    int32_t mediumPauseMax = ticksPerBeat;    // up to 1 beat
-    int32_t longPauseMax = ticksPerBeat * 2;  // up to 2 beats
-    int32_t barPauseMax = ticksPerBar;        // up to 1 bar
-
+    /***********************************/
+    /*           FORMATTING            */
+    /***********************************/
     for (size_t i = 0; i < allVpRecCount;)
     {
         if (!allVpRecs[i].closed)
@@ -369,7 +345,46 @@ static int wFiles(FILE *sheetStream, FILE *logStream, uint8_t *buffer, long file
             i++;
             continue;
         }
+        /******************* TIME SIGNATURE LOGIC ********************/
+        // turning it dynamic as opposed to last-seen
+        // [!] currently only works if the time signature change occurs inside the same track as the record [!]
+        // (tho in that regard 0 values should still be guarded by the defaulting below for now)
+        // ^ maybe to make global pointer to pointers of time signature arrays with Absolute Ticks & Time Signature Values,
+        // and advance PoP when absolute tick of record > absolute tick of NEXT time signature 
+        // (before note is to be formatted, so, here...)
+        
+        // ticksPerBeat = TPQN * (4 / denum)
+        int32_t timeSigDenum;
+        timeSigDenum = 1 << allVpRecs[i].timeSigD;
+        if (timeSigDenum <= 0)
+        {
+            timeSigDenum = 4;
+            printf("\none timeSignature denominator for track %zu was equal or less than 0 and was set to 4\n", i);
+        }
 
+        int32_t ticksPerBeat = (int32_t)((header.division * 4) / timeSigDenum);
+        if (ticksPerBeat <= 0)
+        {
+            ticksPerBeat = header.division;
+            printf("\none calculated ticksPerBeat for track %zu was equal or less than 0 and was set to default header division\n", i);
+        }
+
+        int32_t ticksPerBar = ticksPerBeat * allVpRecs[i].timeSigN;
+
+        int32_t chordTicks = ticksPerBeat / 8; // notes started within 1/8 beat we consider simultaneous
+        if (chordTicks < 1)
+        {
+            chordTicks = 1;
+            printf("\none calculated chordTicks for track %zu was less than 1 and was set to default of 1\n", i);
+        }
+
+        int32_t noPauseMax = ticksPerBeat / 4;    // up to 1/16 note
+        int32_t shortPauseMax = ticksPerBeat / 2; // up to 1/8 note
+        int32_t mediumPauseMax = ticksPerBeat;    // up to 1 beat
+        int32_t longPauseMax = ticksPerBeat * 2;  // up to 2 beats
+        int32_t barPauseMax = ticksPerBar;        // up to 1 bar
+
+        /******************* CLUSTERING LOGIC ************************/
         // Find one simultaneous cluster
         size_t clusterEnd = i;
         while (clusterEnd + 1 < allVpRecCount)
@@ -414,7 +429,7 @@ static int wFiles(FILE *sheetStream, FILE *logStream, uint8_t *buffer, long file
             uint8_t trOctave;
             numToKey((uint8_t)transposedKeyValue, &trKeyNum, &trOctave);
 
-            const char *vpKey = "";
+            const char* vpKey = "";
             if (trOctave <= 8 && trKeyNum <= 11 && keyboard[trOctave][trKeyNum][0] != '\0')
                 vpKey = keyboard[trOctave][trKeyNum];
 
@@ -482,7 +497,7 @@ static int wFiles(FILE *sheetStream, FILE *logStream, uint8_t *buffer, long file
         i = clusterEnd + 1;
     }
     free(allVpRecs);
-    allVpRecs = (void *)0;
+    allVpRecs = (void*)0;
     if (sheetStream)
         fprintf(sheetStream, "\n");
     printf("\n");
@@ -490,9 +505,10 @@ static int wFiles(FILE *sheetStream, FILE *logStream, uint8_t *buffer, long file
     return 0;
 }
 
-// parse header chunk
-static _Bool parseMThd(FILE *sheetStream, FILE *logStream, uint8_t *buffer, int startOffset)
-{
+/*****************************************************************************/
+/*                            PARSE MIDI HEADER                              */
+/*****************************************************************************/
+static _Bool parseMThd(FILE* sheetStream, FILE* logStream, uint8_t* buffer, int startOffset) {
     header.length = 0;
     header.format = 0;
     header.nTrks = 0;
@@ -544,7 +560,8 @@ static _Bool parseMThd(FILE *sheetStream, FILE *logStream, uint8_t *buffer, int 
     }
     if (logStream)
     {
-        fprintf(logStream, "\n\n║ MThd start(@B%i)", startOffset - 4);
+        fprintf(logStream, "\nfor parsing, bytes start from location 0\n");
+        fprintf(logStream, "\n║ MThd start(@B%i)", startOffset - 4);
         fprintf(logStream, " | MThd data length (from B%i): %iB", (startOffset + 3), header.length);
         fprintf(logStream, " | Format: %hi", header.format);
         fprintf(logStream, " | nTrks: %hi", header.nTrks);
@@ -554,9 +571,10 @@ static _Bool parseMThd(FILE *sheetStream, FILE *logStream, uint8_t *buffer, int 
     return 0;
 }
 
-// parse track chunk
-static _Bool parseMTrk(FILE *sheetStream, FILE *logStream, uint8_t *buffer, int lengthStart, struct VpRec **allVpRecs, size_t *allVpRecCount, size_t *allVpRecCapacity)
-{
+/*****************************************************************************/
+/*                             PARSE MIDI TRACK                              */
+/*****************************************************************************/
+static _Bool parseMTrk(FILE* sheetStream, FILE* logStream, uint8_t* buffer, int lengthStart, struct VpRec** allVpRecs, size_t* allVpRecCount, size_t* allVpRecCapacity) {
     /*************************************** INITIALS ****************************************/
     // it took me 5 days and i already have no clue what the frick i wrote down here but it seems to work
     //
@@ -582,22 +600,25 @@ static _Bool parseMTrk(FILE *sheetStream, FILE *logStream, uint8_t *buffer, int 
     int i = dataStart;
     uint8_t runningStatus = 0;
     int32_t noteRecIndex[16][128];
-    struct VpRec *VpRecs = (void *)0;
+    struct VpRec* VpRecs = (void*)0;
+    struct VpRec rec;
     size_t VpRecCount = 0;
     size_t VpRecCapacity = 0;
+
     int8_t timeSigN = 4;  // Numerator (default 4/4)
     int8_t timeSigD = 2;  // Denominator exponent (2^2 = 4, default 4/4)
-    int8_t timeSigC = 24; // Number of Midi Clocks in a metronome click
-    int8_t timeSigB = 8;  // Number of notated 32nd notes per quarter-note
+    int8_t timeSigC = 24; // Number of Midi Clocks in a metronome click <-- unused for now
+    int8_t timeSigB = 8;  // Number of notated 32nd notes per quarter-note <-- unused for now
+
     /* sf = -7: 7 flats
      * sf = -1: 1 flat
      * sf = 0: key of C
      * sf = 1: 1 sharp
      * sf = 7: 7 sharps */
-    int8_t keySigSF = 0;
+    int8_t keySigSF = 0; // <-- unused for now
     /* mi = 0: major key
      * mi = 1: minor key */
-    _Bool keySignMI = 0;
+    _Bool keySignMI = 0; // <-- unused for now
 
     // as default tempo if it's not later specified by meta events
     if (!track.microsPQN)
@@ -727,11 +748,12 @@ static _Bool parseMTrk(FILE *sheetStream, FILE *logStream, uint8_t *buffer, int 
                 timeSigD = buffer[dataEnd - 3];
                 timeSigC = buffer[dataEnd - 2];
                 timeSigB = buffer[dataEnd - 1];
-                vpTimeSigN = timeSigN;
-                vpTimeSigD = timeSigD;
                 int8_t timeSigDr = 1; // Denumerator result
-                for (int i = 0; i < timeSigD; i++)
-                    timeSigDr *= 2;
+                timeSigDr = 1 << timeSigD;
+
+                //printf("@%i | changed time signature from %i/2^%i to %i/2^%i\n", cursor, rec.timeSigN, rec.timeSigD, timeSigN, timeSigD);
+                rec.timeSigN = timeSigN;
+                rec.timeSigD = timeSigD;
 
                 if (logStream)
                 {
@@ -869,7 +891,6 @@ static _Bool parseMTrk(FILE *sheetStream, FILE *logStream, uint8_t *buffer, int 
 #define isNoteOn (status >= 0x90 && status <= 0x9F)  // 0x9# Note ON
 #define isNoteOff (status >= 0x80 && status <= 0x8F) // 0x8# Note OFF
 #define hasVel (buffer[dataStartByte + 1])
-
             /***********************************/
             /*             NOTE_ON             */
             /***********************************/
@@ -885,7 +906,6 @@ static _Bool parseMTrk(FILE *sheetStream, FILE *logStream, uint8_t *buffer, int 
                 numToKey(keyValue, &keyNum, &octave);
 
                 track.notes[channel][keyValue] = track.event.absTime;
-                struct VpRec rec;
                 rec.channel = channel + 1;
                 rec.keyValue = keyValue;
                 rec.keyNum = keyNum;
@@ -894,6 +914,12 @@ static _Bool parseMTrk(FILE *sheetStream, FILE *logStream, uint8_t *buffer, int 
                 rec.endTick = -1;
                 rec.durationTick = -1;
                 rec.durationMS = -1;
+
+                /*
+                printf("VpRec | channel: %u | keyValue: %u | keyNum: %u | octave: %u | startTick: %li | endTick: %li | durationTick: %li | durationMS: %li | timeSignature: %i/2^%i\n",
+                    rec.channel, rec.keyValue, rec.keyNum, rec.octave, rec.startTick, rec.endTick, rec.durationTick, rec.durationMS, rec.timeSigN, rec.timeSigD);
+                */
+
                 rec.closed = 0;
                 if (apndVpRec(&VpRecs, &VpRecCount, &VpRecCapacity, rec))
                 {
@@ -1020,14 +1046,14 @@ static _Bool parseMTrk(FILE *sheetStream, FILE *logStream, uint8_t *buffer, int 
         if (apndVpRec(allVpRecs, allVpRecCount, allVpRecCapacity, VpRecs[recI]))
         {
             free(VpRecs);
-            VpRecs = (void *)0;
+            VpRecs = (void*)0;
             if (logStream)
                 fprintf(logStream, "\n | failed to allocate merged VP buffer");
             return 1;
         }
     }
     free(VpRecs);
-    VpRecs = (void *)0;
+    VpRecs = (void*)0;
 
     if (logStream)
         fprintf(logStream, "\n");
@@ -1073,8 +1099,7 @@ else // (if TRUE)
 */
 // ^^^ from that and deltaTime as uint32_t, with bit shifting i can do VVV
 // handle VLQ
-static _Bool calcVLQ(uint8_t *buffer, int index)
-{
+static _Bool calcVLQ(uint8_t* buffer, int index) {
     VLQ.VLQi = index;
     VLQ.cByte = 0;
     VLQ.VLQresult = 0;
@@ -1088,12 +1113,11 @@ static _Bool calcVLQ(uint8_t *buffer, int index)
     return 0;
 }
 
-static _Bool apndVpRec(struct VpRec **recs, size_t *count, size_t *capacity, struct VpRec value)
-{
+static _Bool apndVpRec(struct VpRec** recs, size_t* count, size_t* capacity, struct VpRec value) {
     if (*count == *capacity)
     {
         size_t newCapacity = (*capacity == 0) ? 256 : (*capacity * 2);
-        struct VpRec *newRecs = (struct VpRec *)realloc(*recs, newCapacity * sizeof(struct VpRec));
+        struct VpRec* newRecs = (struct VpRec*)realloc(*recs, newCapacity * sizeof(struct VpRec));
         if (!newRecs)
             return 1;
         *recs = newRecs;
@@ -1105,10 +1129,9 @@ static _Bool apndVpRec(struct VpRec **recs, size_t *count, size_t *capacity, str
     return 0;
 }
 
-static int compVpRec(const void *a, const void *b)
-{
-    const struct VpRec *ra = (const struct VpRec *)a;
-    const struct VpRec *rb = (const struct VpRec *)b;
+static int compVpRec(const void* a, const void* b) {
+    const struct VpRec* ra = (const struct VpRec*)a;
+    const struct VpRec* rb = (const struct VpRec*)b;
 
     if (ra->startTick < rb->startTick)
         return -1;
@@ -1127,8 +1150,7 @@ static int compVpRec(const void *a, const void *b)
     return 0;
 }
 
-static void numToKey(uint8_t number, uint8_t *resultName, uint8_t *resultOctave)
-{
+static void numToKey(uint8_t number, uint8_t* resultName, uint8_t* resultOctave) {
     char octave = 0;  // 0 to 8
     int minInOct = 0; // 24 (0)
     int maxInOct = 0; // 35 (11)
