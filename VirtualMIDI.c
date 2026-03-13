@@ -2,7 +2,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
-#include <math.h>
 
 const char letters[14][3] = { "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B", "??" }; // # = 0x23
 const char keyboard[9][13][2] = {
