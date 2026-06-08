@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include "CLI.h"
 
 const char letters[14][3] = { "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B", "??" }; // # = 0x23
 const char keyboard[9][13][2] = {
@@ -69,155 +70,43 @@ struct VLQ {
     uint32_t VLQresult;
 } VLQ;
 
-_Bool hasOutput = 0;
-_Bool hasOutputPath = 0;
-_Bool hasLogging = 0;
-_Bool hasLoggingPath = 0;
-const char* options[] = { "-o", "-l" }; // require to be followed by a vlue
-const char* flags[] = { "--help" }; // just bools
-
-static char* fixPaths(const char* argv) {
-    char* fixedPath = malloc(strlen(argv) + 1);
-    for (size_t i = 0; i < strlen(argv); i++)
-        if (argv[i] == '\\')
-            fixedPath[i] = '/';
-        else
-            fixedPath[i] = argv[i];
-    fixedPath[strlen(argv)] = '\0';
-    return fixedPath;
-}
-static _Bool isOption(const char* argv) { return (argv && argv[0] == '-' && argv[1] != '-'); }
-static _Bool isFlag(const char* argv) { return (argv && argv[0] == '-' && argv[1] == '-'); }
-static _Bool whatDoesOption(const char* argv) { // ooga booga
-    for (int i = 0; i < sizeof(options) / sizeof(options[0]); i++)
-        if (strcmp(argv, options[i]) == 0)
-        {
-            switch (i)
-            {
-            case 0: // "-o"
-                hasOutput = 1;
-                break;
-            case 1: // "-l"
-                hasLogging = 1;
-                break;
-            }
-            return 1;
-        }
-    return 0;
-}
-static _Bool whatDoesFlag(const char* argv) { // ooga booga
-    for (int i = 0; i < sizeof(flags) / sizeof(flags[0]); i++)
-        if (strcmp(argv, flags[i]) == 0)
-        {
-            switch (i)
-            {
-            case 0: // "--help"
-                printf("\nVirtualMIDI:\n");
-                printf("<inputPath>: The disk path to your MIDI file. Example: 'C:/Users/John/Music/File.mid'.\n");
-                printf("[-o]: Optional, tells the program to create a .txt file for the virtual piano notation, must be followed by a path or it will use the default output folder.\n");
-                printf("[-l]: Optional, tells the program to create a .log file for additional information, must be followed by a path or it will use the default output folder.\n");
-                printf("[<outputPath>]: Optional, output path for [-o] and/or [-l]\n\n");
-                break;
-            }
-            return 1;
-        }
-    return 0;
-}
-
 static int wFiles(FILE*, FILE*, uint8_t*, long);
 static _Bool parseMThd(FILE*, uint8_t*, int);
-static _Bool parseMTrk(FILE*, uint8_t*, int,
-    struct noteRec**, size_t*, size_t*,
-    struct TsRec**, size_t*, size_t*);
+static _Bool parseMTrk(FILE*, uint8_t*, int, struct noteRec**, size_t*, size_t*, struct TsRec**, size_t*, size_t*);
 static _Bool calcVLQ(uint8_t*, int);
 static _Bool appendRec(void**, size_t*, size_t*, size_t, const void*);
 static int compNoteRec(const void*, const void*);
 static int compTsRec(const void*, const void*);
 static void numToKey(uint8_t, uint8_t*, uint8_t*);
 
+_Bool hasOutput = 0;
+_Bool hasLogging = 0;
+
 /************************ START OF MAIN ******************************/
 int main(int argc, char* argv[]) {
     /***********************************/
     /*           CLI LOGIC             */
     /***********************************/
-    char outputSheetPath[200];
-    char outputLogPath[200];
-    char inputFilePath[200];
+    char inFPath[512];
+    char outSPath[512];
+    char outLPath[512];
 
-    if (argc >= 2)
-    {
-        snprintf(inputFilePath, sizeof(inputFilePath), "%s", argv[1]);
-        int i = 0;
-        while (*++argv)
-            // *argv is a pointer to a pointer of a string array,
-            // so it's basically the index of the current pointer to the array of the argument
-            // if i do *++argv i move the index by 1 to the next pointer
-        {
-            i++;
-            if (isOption(*argv)) // if arg is an option
-            {
-                if (!whatDoesOption(*argv))
-                {
-                    printf("unknown option: %s", *argv);
-                    return 1;
-                }
-            }
-            else if (isFlag(*argv)) // if arg is a flag
-            {
-                if (!whatDoesFlag(*argv))
-                {
-                    printf("unknown flag: %s", *argv);
-                    return 1;
-                }
-            }
-            else // if arg is a value
-            {
-                if (hasOutput)
-                {
-                    char* fixedPath = fixPaths(*argv);
-                    snprintf(outputSheetPath, sizeof(outputSheetPath), "%s/VirtualMIDI.txt", fixedPath);
-                    printf("Output file at: %s\n", outputSheetPath);
-                    hasOutputPath = 1;
-                    hasOutput = 0;
-                    free(fixedPath);
-                }
-                if (hasLogging)
-                {
-                    char* fixedPath = fixPaths(*argv);
-                    snprintf(outputLogPath, sizeof(outputLogPath), "%s/VirtualMIDI.log", fixedPath);
-                    printf("Log file at: %s\n", outputLogPath);
-                    hasLoggingPath = 1;
-                    hasLogging = 0;
-                    free(fixedPath);
-                }
-            }
-
-            if (i == argc - 1) // at end of args
-            {
-                // defaulting
-                if (hasOutput && !hasOutputPath)
-                {
-                    snprintf(outputSheetPath, sizeof(outputSheetPath), "output/VirtualMIDI.txt");
-                    printf("Output file defaulted at: %s\n", outputSheetPath);
-                }
-                if (hasLogging && !hasLoggingPath)
-                {
-                    snprintf(outputLogPath, sizeof(outputLogPath), "output/VirtualMIDI.log");
-                    printf("Log file defaulted at: %s\n", outputLogPath);
-                }
-            }
+    if (argc >= 2) {
+        if (!CLIargs(argc, argv, &hasOutput, &hasLogging, inFPath, outSPath, outLPath)) {
+            printf("error with CLI\n");
+            return 0;
         }
     }
     else
     {
-        printf("VirtualMIDI: <inputPath> [-o] [-l] [<outputPath>]\nVirtualMIDI: use --help for more information");
+        printf("VirtualMIDI: <inputPath> [-o] [-l] [<outputPath>]\nVirtualMIDI: use --help for more information\n");
         return 0;
     }
 
     long fileLength;
     uint8_t* buffer;
 
-    FILE* inputMidiFile = fopen(inputFilePath, "rb");
+    FILE* inputMidiFile = fopen(inFPath, "rb");
     if (!inputMidiFile) // Check if file was opened
     {
         printf("inputMidiFile stream not opened");
@@ -247,9 +136,9 @@ int main(int argc, char* argv[]) {
     FILE* logStream = (void*)0;
 
     if (hasOutput)
-        sheetStream = fopen(outputSheetPath, "w");
+        sheetStream = fopen(outSPath, "w");
     if (hasLogging)
-        logStream = fopen(outputLogPath, "w");
+        logStream = fopen(outLPath, "w");
 
     if (wFiles(sheetStream, logStream, buffer, fileLength) != 0)
         return 1;
