@@ -1,6 +1,6 @@
 # VirtualMIDI
 
-![GitHub code size in bytes](https://img.shields.io/github/languages/code-size/NUVXD/VirtualMIDI) ![GitHub commit activity](https://img.shields.io/github/commit-activity/t/NUVXD/VirtualMIDI) [![GitHub License](https://img.shields.io/github/license/NUVXD/VirtualMIDI)](https://github.com/NUVXD/VirtualMIDI/blob/main/LICENSE)
+![GitHub code size in bytes](https://img.shields.io/github/languages/code-size/NUVXD/VirtualMIDI) [![GitHub License](https://img.shields.io/github/license/NUVXD/VirtualMIDI)](https://github.com/NUVXD/VirtualMIDI/blob/main/LICENSE)
 
 Converts any [Format0 or Format1](https://midi.org/standard-midi-files-specification) MIDI file into a music sheet that may be played according to the common syntax for virtual pianos.  
 MIDI files that hold a header that indicates Format2 tracks are not supported and it may either not work at all or produce weird results.  
